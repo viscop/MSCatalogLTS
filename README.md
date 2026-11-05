@@ -70,6 +70,11 @@ Title                                                                           
 Get-MSCatalogUpdate -Search "KB5065426" | Save-MSCatalogUpdate -Destination "C:\Updates"
 ```
 
+`Save-MSCatalogUpdate` processes every update passed through the pipeline.
+`-DownloadAll` downloads all available files for each update; without it, the
+first file of each update is downloaded. To download just one update from a search,
+select it explicitly with `Select-Object -First 1` before `Save-MSCatalogUpdate`.
+
 ### Example 3: Filter by Date Range
 
 ```powershell

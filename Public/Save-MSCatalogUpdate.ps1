@@ -48,15 +48,14 @@ function Save-MSCatalogUpdate {
 
         if (-not $GuidsToProcess -or $GuidsToProcess.Count -eq 0) {
              # Filter out updates with valid GUIDs
-            $ValidUpdates = $AllUpdates | Where-Object { $_.Guid -and $_.Guid -ne '' }
+            $ValidUpdates = @($AllUpdates | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Guid) })
 
             if ($ValidUpdates -and $ValidUpdates.Count -gt 0) {
-                # Sort by Title to find the latest update
-                $GuidsToProcess = $ValidUpdates |
-                    Sort-Object -Property Title -Descending |
+                # Process every supplied update. DownloadAll controls the files
+                # selected for each update, not the number of pipeline updates.
+                $GuidsToProcess = @($ValidUpdates |
                     ForEach-Object { $_.Guid } |
-                    Select-Object -First 1 |
-                    Select-Object -Unique
+                    Select-Object -Unique)
                 Write-Output "Selected $($GuidsToProcess.Count) update(s) from pipeline."
             } else {
                 Write-Warning "No valid update found with a GUID."
