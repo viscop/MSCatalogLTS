@@ -106,6 +106,110 @@ Output: Appended 2 updates to JSON file: updates.json (skipped 23 duplicates)
 
 ---
 
+### Example 6: Retrieve Supersedence Relationships
+
+```powershell
+Get-MSCatalogUpdate `
+    -Search "Windows Server 24H2" `
+    -IncludeSupersedence
+
+# Inspect relationships explicitly (the default output remains the normal table)
+$updates = Get-MSCatalogUpdate -Search "KB5043080" -IncludeSupersedence
+$updates | Select-Object Guid, Supersedes, SupersededBy, SupersedenceStatus
+$updates[0].SupersededBy | Format-Table Guid, Title
+```
+
+`-IncludeSupersedence` fetches detail pages for unique update GUIDs remaining after
+filtering, with up to four concurrent requests and a 20-second timeout per request.
+Successful results (including title-only relationships) are cached for five minutes
+in the module session, up to 256 updates; failed lookups are retried on the next
+command invocation. Reimporting the module with `-Force` clears this cache.
+Without the switch, no supersedence requests are made, the relationship
+properties remain `$null`, and `SupersedenceStatus` is `NotRequested`.
+
+The default output always uses the normal table (`Title`, `Products`,
+`Classification`, `LastUpdated`, `Size`), including with `-IncludeSupersedence`
+or `-ExcludeSuperseded`. Related patches and lookup metadata are available on the
+objects and in exports; use `Select-Object` or `Format-List` to inspect them
+explicitly. `-IncludeSuperseded` is also accepted as an alias for
+`-IncludeSupersedence`.
+
+| Property | Structure / meaning |
+|----------|---------------------|
+| `Supersedes` | Array of updates replaced by this update. Each entry has `Guid` (Catalog update GUID, or `$null` when unavailable) and `Title` (decoded Catalog title, which may contain a KB number). |
+| `SupersededBy` | Array of updates that replace this update, with the same entry structure. |
+| `SupersedenceStatus` | `Retrieved`: both lists were parsed and all entries have GUIDs. `Partial`: both lists were parsed, but some entries have only a title. `Failed`: the request or metadata validation failed. `NotRequested`: the switch was omitted or false. |
+| `SupersedenceError` | Explanation for `Partial` or `Failed`; otherwise empty. |
+
+A confirmed `n/a` list becomes an empty array. If either list is missing or
+malformed, both relationship properties remain `$null`, status is `Failed`, and a
+warning is emitted. A failed lookup must not be interpreted as having no relationships.
+Title-only entries are retained with a null GUID; the module does not guess GUIDs
+from titles or KB numbers. Use JSON (`-Format JSON` or `-ExportJson`) to preserve
+the nested entries; CSV does not preserve nested relationship objects.
+
+This feature reads the public detail page's **Package Details** HTML, including
+`supersedesInfo` and `supersededbyInfo`, rather than a documented supersedence API.
+The markup and availability can change. For example, the
+[server KB5044284 detail page](https://www.catalog.update.microsoft.com/ScopedViewInline.aspx?updateid=a62b9737-1fe8-4df1-94b4-8ec61855a8d0)
+can list an older update as plain title text without a GUID link. `Retrieved`
+describes successful parsing of what the Catalog reports, not a guarantee that
+Microsoft publishes a complete relationship graph. The data reflects the Catalog
+at query time, not a historical snapshot. Only the relationships displayed for each
+result are returned; related pages are not followed, no transitive closure is
+computed. `-IncludeSupersedence` alone does not remove search results.
+
+### Example 7: Exclude Updates Replaced Within the Selected Results
+
+```powershell
+Get-MSCatalogUpdate `
+    -Search "Server 24H2" `
+    -Architecture x64 `
+    -Date "2026-09" `
+    -AllPages `
+    -ExcludeSuperseded
+
+# Single date bounds and relative dates work as well
+Get-MSCatalogUpdate -Search "Server 24H2" -ToDate "2026-09-30" -AllPages -ExcludeSuperseded
+Get-MSCatalogUpdate -Search "Server 24H2" -FromDate "2026-09-01" -AllPages -ExcludeSuperseded
+Get-MSCatalogUpdate -Search "Server 24H2" -LastDays 30 -AllPages -ExcludeSuperseded
+
+# Alternatively, use a range of Catalog LastUpdated dates (both bounds inclusive)
+Get-MSCatalogUpdate `
+    -Search "Server 24H2" `
+    -Architecture x64 `
+    -FromDate "2026-09-01" `
+    -ToDate "2026-09-30" `
+    -AllPages `
+    -ExcludeSuperseded
+```
+
+`-ExcludeSuperseded` works with every existing date filter: `-Date`, a date token
+in `-Search`, `-FromDate` and `-ToDate` (separately or together), and `-LastDays`.
+It also works without a date filter and includes supersedence metadata automatically.
+All existing search filters are applied before comparing relationships.
+`-Date` and date tokens in `-Search` match title text (for example `2026-09`);
+they are not interpreted as publication dates. `-FromDate`, `-ToDate`, and
+`-LastDays` use `LastUpdated`. Date ranges may span multiple months. Both bounds are inclusive, so use
+`-ToDate "2026-09-30"` for the end of September (`2026-10-01` includes October 1).
+The filter then removes an update only if a `SupersededBy` GUID
+matches another update in those filtered results. For example, if September update
+A is replaced by September update B, A is omitted and B is kept. When only
+September is selected, an October replacement does not exclude a September result. Independent updates, such as
+Windows and .NET updates, are evaluated separately using their GUID relationships.
+
+All other search filters still apply. A replacement excluded by those filters
+(for example a preview without `-IncludePreview`) is not used to remove a result.
+Use `-AllPages` to consider all available result pages. Failed lookups and
+relationships without usable GUIDs do not cause an update to be removed; check
+`SupersedenceStatus` and `SupersedenceError` for incomplete metadata. The relationship
+properties retain the full current Catalog metadata, including other months.
+`LastUpdated` can change later. If several date filters are specified, their
+intersection is used. With only `-FromDate`, newer replacements can be included;
+use `-ToDate` as well when an upper cutoff is needed. This
+is filtering within the selected results, not reconstruction of a historical
+Catalog snapshot or resolution of a complete servicing baseline.
+
 ## 📚 Available Functions
 
 | Function | Description |

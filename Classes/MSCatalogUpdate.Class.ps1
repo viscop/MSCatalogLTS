@@ -10,6 +10,10 @@ class MSCatalogUpdate {
     [string[]] $FileNames
     [string] $SupportUrl
     [string] $SHA1
+    [object[]] $Supersedes
+    [object[]] $SupersededBy
+    [string] $SupersedenceStatus = 'NotRequested'
+    [string] $SupersedenceError
 
     MSCatalogUpdate() {}
 
