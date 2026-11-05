@@ -44,6 +44,15 @@ function Get-MSCatalogUpdate {
         [Parameter(Mandatory = $false,
             HelpMessage = "Include preview updates")]
         [switch] $IncludePreview,
+
+        [Parameter(Mandatory = $false,
+            HelpMessage = "Include supersedence relationships from the update detail page")]
+        [Alias('IncludeSuperseded')]
+        [switch] $IncludeSupersedence,
+
+        [Parameter(Mandatory = $false,
+            HelpMessage = "Exclude updates replaced by another filtered result; works with all date filters and includes supersedence metadata")]
+        [switch] $ExcludeSuperseded,
         
         [Parameter(Mandatory = $false,
             HelpMessage = "Filter updates from the last N days")]
@@ -152,6 +161,12 @@ function Get-MSCatalogUpdate {
         #endregion Debug Preference Override
 
         #region Parameter Validation
+        if ($ExcludeSuperseded) {
+            if ($PSBoundParameters.ContainsKey('FromDate') -and $PSBoundParameters.ContainsKey('ToDate') -and $FromDate -gt $ToDate) {
+                throw '-FromDate must be earlier than or equal to -ToDate.'
+            }
+            $IncludeSupersedence = $true
+        }
         if ($PSCmdlet.ParameterSetName -eq 'Search' -and $PSBoundParameters.ContainsKey('Version')) {
             $errorMessage = "The -Version parameter can only be used with -OperatingSystem parameter, not with -Search. " +
                             "Either use: -Search 'Windows 10 22H2' OR -OperatingSystem 'Windows 10' -Version '22H2'"
@@ -183,6 +198,12 @@ function Get-MSCatalogUpdate {
         #endregion Initialization
 
         #region Smart Search Parser
+        # Date tokens also apply to the OS parameter set. Reset on every call so
+        # a previous dated search cannot affect a subsequent date-range search.
+        $script:DateToken = $null
+        if ($Date) {
+            $script:DateToken = $Date
+        }
         if ($PSCmdlet.ParameterSetName -eq 'Search' -and $Search) {
             # Apply default descending sort
             if (-not $PSBoundParameters.ContainsKey('Descending')) {
@@ -194,7 +215,6 @@ function Get-MSCatalogUpdate {
             $updateTypePrefix = ""
             
             # Extract date token from search string or -Date parameter
-            $script:DateToken = $null
             if ($Date) {
                 # User provided explicit -Date parameter
                 $script:DateToken = $Date
@@ -784,6 +804,21 @@ function Get-MSCatalogUpdate {
             }
             #endregion Apply Filters
 
+            if ($IncludeSupersedence) {
+                $supersedenceResults = Get-UpdateSupersedenceBatch -Guids @($Updates | ForEach-Object { $_.Guid })
+                foreach ($update in $Updates) {
+                    $metadata = $supersedenceResults[$update.Guid]
+                    $update.Supersedes = $metadata.Supersedes
+                    $update.SupersededBy = $metadata.SupersededBy
+                    $update.SupersedenceStatus = $metadata.Status
+                    $update.SupersedenceError = $metadata.Error
+                }
+            }
+
+            if ($ExcludeSuperseded) {
+                $Updates = @(Select-NonSupersededUpdate -Updates @($Updates))
+            }
+
             #region Sorting and Output
             # Apply sorting
             $Updates = switch ($SortBy) {
@@ -998,6 +1033,8 @@ function Get-MSCatalogUpdate {
 
             # Return results to pipeline
             if (-not $exportPerformed -or $IsUpdate -or $IsPiped) {
+                $jsonDepth = if ($IncludeSupersedence) { 10 } else { 2 }
+                $xmlDepth = if ($IncludeSupersedence) { 10 } else { 1 }
                 switch ($Format) {
                     "Default" { 
                         if ($Properties) { $Updates | Select-Object $Properties }
@@ -1008,12 +1045,12 @@ function Get-MSCatalogUpdate {
                         else { $Updates | ConvertTo-Csv -NoTypeInformation }
                     }
                     "JSON" { 
-                        if ($Properties) { $Updates | Select-Object $Properties | ConvertTo-Json }
-                        else { $Updates | ConvertTo-Json }
+                        if ($Properties) { $Updates | Select-Object $Properties | ConvertTo-Json -Depth $jsonDepth }
+                        else { $Updates | ConvertTo-Json -Depth $jsonDepth }
                     }
                     "XML" { 
-                        if ($Properties) { $Updates | Select-Object $Properties | ConvertTo-Xml -As String }
-                        else { $Updates | ConvertTo-Xml -As String }
+                        if ($Properties) { $Updates | Select-Object $Properties | ConvertTo-Xml -As String -Depth $xmlDepth }
+                        else { $Updates | ConvertTo-Xml -As String -Depth $xmlDepth }
                     }
                 }
             }
