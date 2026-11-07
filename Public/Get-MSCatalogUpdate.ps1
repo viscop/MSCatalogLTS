@@ -52,6 +52,7 @@ function Get-MSCatalogUpdate {
 
         [Parameter(Mandatory = $false,
             HelpMessage = "Exclude updates replaced by another filtered result; works with all date filters and includes supersedence metadata")]
+        [Alias('ExcludeSupersedence')]
         [switch] $ExcludeSuperseded,
         
         [Parameter(Mandatory = $false,
@@ -70,14 +71,20 @@ function Get-MSCatalogUpdate {
             HelpMessage = "Operating System to search updates for")]
         [ValidateSet("Windows 11", "Windows 10", "Windows Server")]
         [string] $OperatingSystem,
+
+        [Parameter(Mandatory = $false,
+            HelpMessage = "Filter by an exact product name from the Catalog Products column")]
+        [ValidateScript({ -not [string]::IsNullOrWhiteSpace($_) })]
+        [string] $Product,
         
         [Parameter(Mandatory = $false,
             HelpMessage = "Select specific properties to display")]
         [string[]] $Properties,
         
-        [Parameter(Mandatory = $true, ParameterSetName = 'Search',
+        [Parameter(Mandatory = $false, ParameterSetName = 'Search',
             Position = 0,
             HelpMessage = "Search query for Microsoft Update Catalog")]
+        [ValidateScript({ -not [string]::IsNullOrWhiteSpace($_) })]
         [string] $Search,
         
         [Parameter(Mandatory = $false,
@@ -161,6 +168,17 @@ function Get-MSCatalogUpdate {
         #endregion Debug Preference Override
 
         #region Parameter Validation
+        if ($PSCmdlet.ParameterSetName -eq 'Search' -and
+            [string]::IsNullOrWhiteSpace($Search) -and [string]::IsNullOrWhiteSpace($Product)) {
+            throw [System.ArgumentException]::new('Specify at least one non-empty -Search or -Product value (or use -OperatingSystem).')
+        }
+        $ProductOnly = $PSCmdlet.ParameterSetName -eq 'Search' -and -not $PSBoundParameters.ContainsKey('Search')
+        if ($Product) {
+            $Product = ($Product -replace '\s+', ' ').Trim()
+        }
+        if ($ProductOnly) {
+            Write-Warning 'Product-only search uses the Catalog free-text index to find candidates, then matches the Products column exactly. Complete product enumeration is not guaranteed; the Catalog returns at most 1000 candidates. Use -AllPages for all available pages, or add -Search to narrow the query.'
+        }
         if ($ExcludeSuperseded) {
             if ($PSBoundParameters.ContainsKey('FromDate') -and $PSBoundParameters.ContainsKey('ToDate') -and $FromDate -gt $ToDate) {
                 throw '-FromDate must be earlier than or equal to -ToDate.'
@@ -201,6 +219,14 @@ function Get-MSCatalogUpdate {
         # Date tokens also apply to the OS parameter set. Reset on every call so
         # a previous dated search cannot affect a subsequent date-range search.
         $script:DateToken = $null
+        if ($ProductOnly) {
+            $script:UpdateTypePrefix = $null
+            $script:IsDotNetFrameworkSearch = $false
+            $script:DotNetParsed = $false
+            if (-not $PSBoundParameters.ContainsKey('Descending')) {
+                $Descending = $true
+            }
+        }
         if ($Date) {
             $script:DateToken = $Date
         }
@@ -494,6 +520,12 @@ function Get-MSCatalogUpdate {
                         }
                     }
                 }
+            } elseif ($ProductOnly) {
+                # Seed candidate discovery with the literal Catalog product name.
+                # Do not run it through the OS parser or add title/date terms.
+                $script:VersionForFiltering = $null
+                $script:IsR2Version = $false
+                $Product
             } else {
                 $script:VersionForFiltering = $null
                 $script:IsR2Version = $false
@@ -522,7 +554,7 @@ function Get-MSCatalogUpdate {
             Write-Debug "IsR2Version: $script:IsR2Version"
             Write-Debug "UpdateTypePrefix for filtering: $script:UpdateTypePrefix"
             Write-Debug "IsDotNetFrameworkSearch: $script:IsDotNetFrameworkSearch"
-            Write-Debug "Will use strict search: $(($PSCmdlet.ParameterSetName -eq 'OS' -and $Version) -or $Strict)"
+            Write-Debug "Will use strict search: $(-not $ProductOnly -and (($PSCmdlet.ParameterSetName -eq 'OS' -and $Version) -or $Strict))"
         }
         #endregion Query Building
     }
@@ -535,11 +567,11 @@ function Get-MSCatalogUpdate {
         try {
             #region Search Preparation
             # Auto-enable strict search if "Windows" is in the search query
-            $autoStrictEnabled = $searchQuery -match 'Windows'
+            $autoStrictEnabled = -not $ProductOnly -and $searchQuery -match 'Windows'
             $isNetSearch = $searchQuery -match '^\.NET'
             $useStrictSearch = $false
 
-            if (-not $isNetSearch) {
+            if (-not $isNetSearch -and -not $ProductOnly) {
                 $useStrictSearch = $Strict -or ($PSCmdlet.ParameterSetName -eq 'OS' -and $Version) -or $autoStrictEnabled
             }
 
@@ -562,6 +594,7 @@ function Get-MSCatalogUpdate {
 
             $Res = Invoke-CatalogRequest -Uri $Uri
             $Rows = $Res.Rows
+            $ResultLimitExceeded = $Res.ResultLimitExceeded
 
             Write-Debug "Initial rows returned: $($Rows.Count)"
             #endregion Search Preparation
@@ -575,16 +608,32 @@ function Get-MSCatalogUpdate {
                     Write-Debug "Fetching page $PageCount"
                     $Res = Invoke-CatalogRequest -Uri $PageUri
                     $Rows += $Res.Rows
+                    $ResultLimitExceeded = $ResultLimitExceeded -or $Res.ResultLimitExceeded
                 }
                 Write-Debug "Total rows after pagination: $($Rows.Count)"
             }
             #endregion Pagination
+
+            if ($Product) {
+                # Report limits before local filters can hide the candidate count.
+                if ($ResultLimitExceeded -or $Rows.Count -ge $MaxResults) {
+                    Write-Warning "The Catalog candidate search reached its $MaxResults-result limit. Product-filtered results may be incomplete; add or refine -Search."
+                }
+                if ($Res.NextPage) {
+                    Write-Warning 'Not all Catalog candidate pages were retrieved. Product-filtered results are incomplete; use -AllPages to retrieve available pages (up to 40).'
+                }
+            }
 
             #region Base Filtering
             $Rows = $Rows.Where({
                 $title = $_.SelectNodes("td")[1].InnerText.Trim()
                 $classification = $_.SelectNodes("td")[3].InnerText.Trim()
                 $include = $true
+
+                if ($Product) {
+                    $productNames = @(Get-CatalogProductNames -Products $_.SelectNodes("td")[2].InnerText)
+                    $include = $productNames -contains $Product
+                }
                 
                 Write-Debug "Evaluating: $title | Classification: $classification"
                 

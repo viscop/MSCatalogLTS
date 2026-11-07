@@ -46,6 +46,66 @@ Get-Module -ListAvailable MSCatalogLTS
 
 ## 💡 Quick Start Examples
 
+### Search Text and Catalog Products
+
+```powershell
+# Free-text search (existing behavior)
+Get-MSCatalogUpdate -Search "Cumulative Update"
+
+# Product-only candidate search, followed by exact product filtering
+Get-MSCatalogUpdate -Product "Microsoft Server Operating System-24H2" -AllPages
+
+# Free-text search AND exact product filtering
+Get-MSCatalogUpdate -Search "Cumulative Update" -Product "Microsoft Server Operating System-24H2" -AllPages
+```
+
+`-Search` uses the Catalog's free-text search, including its existing smart OS
+query handling. The Catalog searches multiple fields, including titles,
+descriptions, applicable products, classifications, and KB numbers; a text match
+does not imply that the **Products** column contains a particular product.
+
+`-Product` filters the actual **Products** column for a complete, case-insensitive
+product name. An update associated with several products matches if any individual
+association equals the requested name. Substrings and wildcards do not match.
+HTML entities are decoded and display whitespace is normalized when matching;
+commas inside product names are retained. The existing `Products` output property
+remains a string. Parsing follows the Catalog's current HTML delimiter convention
+(one space after association commas, two after commas within names); a change to
+that rendering may require a parser update. Use the name displayed in the Catalog: for example,
+`Microsoft Server Operating System-24H2`, rather than the commercial name
+`Windows Server 2025`. This parameter introduces no commercial-name mapping.
+
+Supply at least one of `-Search` or `-Product`, or use the existing
+`-OperatingSystem` parameter set. Explicitly empty, null, or whitespace-only search
+and product values are rejected. `-Product` also works with `-OperatingSystem`
+and `-Version`. All existing filters still apply, including architecture,
+classification, date, preview, and Framework filters. Product filtering runs before
+supersedence metadata lookup and exclusion, so a replacement associated only with
+another product cannot remove a selected update. `-ExcludeSupersedence` is accepted
+as an alias for the existing `-ExcludeSuperseded` switch.
+
+**Product-only limitations:** The public Catalog search interface does not expose
+a separate exact-product query or a guaranteed product-enumeration endpoint.
+Without `-Search`, the module sends the literal product name as a free-text query
+to discover candidates, then filters their Products column. It does not apply the
+smart OS parser, phrase quoting (`-Strict`), or inject title/date terms into that
+candidate query. Date and other filters still apply locally. This is not a
+guarantee of every update associated with the product; product-only calls always
+emit a warning explaining the limitation.
+
+Pagination retains the existing behavior: one candidate page by default, or up to
+40 pages with `-AllPages`. The Catalog returns at most 1,000 candidates per query;
+`-AllPages` cannot bypass that cap. Product filtering may leave fewer results, or
+none, on a page even when later pages contain matches. With `-Product`, omitted
+pages and Catalog limit notices produce warnings **before** local filtering.
+`-Search` can narrow the candidate query; local date filters cannot recover
+candidates beyond the Catalog cap. The module does not crawl other queries to
+work around this limit. Defaults still exclude dynamic and preview updates; use
+their existing inclusion switches when needed.
+
+These behaviors are based on the public [Catalog FAQ](https://www.catalog.update.microsoft.com/Faq.aspx)
+and [Catalog search interface](https://www.catalog.update.microsoft.com/Search.aspx?q=Microsoft%20Server%20Operating%20System-24H2).
+
 ### Example 1: Search for Windows 11 Updates
 
 ```powershell

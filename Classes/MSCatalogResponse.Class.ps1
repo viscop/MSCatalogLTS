@@ -5,6 +5,7 @@ class MSCatalogResponse {
     [string] $ViewState
     [string] $ViewStateGenerator
     [string] $NextPage
+    [bool] $ResultLimitExceeded
 
     MSCatalogResponse($HtmlDoc) {
         $Table = $HtmlDoc.GetElementbyId("ctl00_catalogBody_updateMatches")
@@ -15,5 +16,6 @@ class MSCatalogResponse {
         $this.ViewStateGenerator = $HtmlDoc.GetElementbyId("__VIEWSTATEGENERATOR").Attributes["value"].Value
         $NextPageNode = $HtmlDoc.GetElementbyId("ctl00_catalogBody_nextPageLink")
         $this.NextPage = if ($null -ne $NextPageNode) { $NextPageNode.InnerText.Trim() } else { $null }
+        $this.ResultLimitExceeded = $null -ne $HtmlDoc.GetElementbyId("ctl00_catalogBody_textMoreResults")
     }
 }
