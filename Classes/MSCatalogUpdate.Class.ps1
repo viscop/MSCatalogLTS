@@ -8,6 +8,7 @@ class MSCatalogUpdate {
     [string] $SizeInBytes 
     [string] $Guid
     [string[]] $FileNames
+    [object[]] $Downloads = $null
     [string] $SupportUrl
     [string] $SHA1
     [object[]] $Supersedes
