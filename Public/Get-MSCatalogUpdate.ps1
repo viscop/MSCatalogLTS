@@ -1,4 +1,25 @@
 function Get-MSCatalogUpdate {
+    <#
+    .SYNOPSIS
+    Searches the Microsoft Update Catalog and filters matching updates.
+    .DESCRIPTION
+    Supports free-text, product and operating-system searches with the existing
+    filters and pagination. Download metadata is optional; no files are downloaded.
+    .PARAMETER IncludeDownloadUrls
+    Retrieves download metadata after all filters and supersedence exclusion.
+    Makes one additional Catalog DownloadDialog request per unique returned GUID.
+    Independent of IncludeSupersedence and ExcludeSupersedence. Downloads is null
+    when omitted, otherwise a collection (empty if no files exist).
+    Entries expose Url, FileName (the original
+    URL filename), KB and uppercase hexadecimal SHA1. Missing KB or SHA1 is null.
+    The update-level SHA1 property contains the first Downloads entry's digest,
+    when available. Each entry retains its own digest for multi-file updates.
+    Invalid responses, URLs or checksums cause a terminating error identifying the
+    update GUID. No files are downloaded.
+    .EXAMPLE
+    $updates = Get-MSCatalogUpdate -Product 'Microsoft Server Operating System-24H2' -IncludeDownloadUrls
+    $updates | Select-Object Guid -ExpandProperty Downloads
+    #>
     [CmdletBinding(DefaultParameterSetName = 'Search')]
     [OutputType([MSCatalogUpdate[]])]
     param (
@@ -40,6 +61,10 @@ function Get-MSCatalogUpdate {
         [Parameter(Mandatory = $false,
             HelpMessage = "Include file names in the results")]
         [switch] $IncludeFileNames,
+
+        [Parameter(Mandatory = $false,
+            HelpMessage = "Include download URLs and metadata without downloading files")]
+        [switch] $IncludeDownloadUrls,
         
         [Parameter(Mandatory = $false,
             HelpMessage = "Include preview updates")]
@@ -810,7 +835,7 @@ function Get-MSCatalogUpdate {
             #region Create Update Objects
             $Updates = $Rows.Where({ $_.Id -ne "headerRow" }).ForEach({
                 try {
-                    [MSCatalogUpdate]::new($_, $IncludeFileNames)
+                    [MSCatalogUpdate]::new($_, ($IncludeFileNames -and -not $IncludeDownloadUrls))
                 } catch {
                     if ($DebugPreference -ne 'SilentlyContinue') {
                         Write-Warning "Failed to process update: $($_.Exception.Message)"
@@ -857,8 +882,9 @@ function Get-MSCatalogUpdate {
                 $supersedenceResults = Get-UpdateSupersedenceBatch -Guids @($Updates | ForEach-Object { $_.Guid })
                 foreach ($update in $Updates) {
                     $metadata = $supersedenceResults[$update.Guid]
-                    $update.Supersedes = $metadata.Supersedes
-                    $update.SupersededBy = $metadata.SupersededBy
+                    # Normalize empty lists, including cached metadata, to null.
+                    $update.Supersedes = if ($metadata.Supersedes.Count -gt 0) { $metadata.Supersedes } else { $null }
+                    $update.SupersededBy = if ($metadata.SupersededBy.Count -gt 0) { $metadata.SupersededBy } else { $null }
                     $update.SupersedenceStatus = $metadata.Status
                     $update.SupersedenceError = $metadata.Error
                 }
@@ -866,6 +892,23 @@ function Get-MSCatalogUpdate {
 
             if ($ExcludeSuperseded) {
                 $Updates = @(Select-NonSupersededUpdate -Updates @($Updates))
+            }
+
+            if ($IncludeDownloadUrls) {
+                # Per-call lookup only: duplicate search rows share a request.
+                $downloadsByGuid = @{}
+                foreach ($update in $Updates) {
+                    if (-not $downloadsByGuid.ContainsKey($update.Guid)) {
+                        $downloadsByGuid[$update.Guid] = @(Get-UpdateDownloads -Guid $update.Guid)
+                    }
+                    $update.Downloads = $downloadsByGuid[$update.Guid]
+                    if ($update.Downloads.Count -gt 0) {
+                        $update.SHA1 = $update.Downloads[0].SHA1
+                    }
+                    if ($IncludeFileNames) {
+                        $update.FileNames = @($update.Downloads | ForEach-Object { $_.FileName })
+                    }
+                }
             }
 
             #region Sorting and Output
@@ -1082,8 +1125,8 @@ function Get-MSCatalogUpdate {
 
             # Return results to pipeline
             if (-not $exportPerformed -or $IsUpdate -or $IsPiped) {
-                $jsonDepth = if ($IncludeSupersedence) { 10 } else { 2 }
-                $xmlDepth = if ($IncludeSupersedence) { 10 } else { 1 }
+                $jsonDepth = if ($IncludeSupersedence -or $IncludeDownloadUrls) { 10 } else { 2 }
+                $xmlDepth = if ($IncludeSupersedence -or $IncludeDownloadUrls) { 10 } else { 1 }
                 switch ($Format) {
                     "Default" { 
                         if ($Properties) { $Updates | Select-Object $Properties }
@@ -1106,6 +1149,7 @@ function Get-MSCatalogUpdate {
             #endregion Sorting and Output
         }
         catch {
+            if ($IncludeDownloadUrls) { throw }
             if ($DebugPreference -ne 'SilentlyContinue') {
                 Write-Warning "Error processing search request: $($_.Exception.Message)"
                 Write-Debug "Full error: $($_.Exception | Format-List * -Force | Out-String)"

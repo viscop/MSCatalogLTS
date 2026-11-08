@@ -88,7 +88,7 @@ function Get-UpdateSupersedence {
                     }
                 }
             }
-            $relationships[$property] = $entries
+            $relationships[$property] = if ($entries.Count -gt 0) { ,$entries } else { $null }
         }
 
         # Publish both lists only after the entire response has been validated.

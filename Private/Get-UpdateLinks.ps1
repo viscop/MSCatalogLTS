@@ -5,7 +5,11 @@ function Get-UpdateLinks {
             Mandatory = $true,
             Position = 0
         )]
-        [String] $Guid
+        [String] $Guid,
+
+        # Opt-in validation for metadata consumers; legacy callers retain their
+        # existing return values, deduplication and ordering.
+        [switch] $ValidateResponse
     )
 
     $Post = @{size = 0; UpdateID = $Guid; UpdateIDInfo = $Guid} | ConvertTo-Json -Compress
@@ -18,6 +22,7 @@ function Get-UpdateLinks {
         UseBasicParsing = $true
     }
 
+    if ($ValidateResponse) { $Params.ErrorAction = 'Stop' }
     $DownloadDialog = Invoke-WebRequest @Params
     $Links = $DownloadDialog.Content -replace "www.download.windowsupdate", "download.windowsupdate"
 
@@ -26,8 +31,36 @@ function Get-UpdateLinks {
     $Regex = "downloadInformation\[(\d+)\]\.files\[(\d+)\]\.url\s*=\s*'([^']*)'"
     $DownloadMatches = [regex]::Matches($Links, $Regex)
 
+    if ($ValidateResponse) {
+        # An initialized array with no file records is a successful empty result.
+        # Missing markup or incomplete assignments are parsing failures instead.
+        if ($Links -notmatch 'downloadInformation\s*=\s*(?:new\s+Array\s*\(\s*\)|\[\s*\])\s*;' -or
+            $Links -match 'id\s*=\s*["'']errorPageDisplayedError["'']') {
+            throw "Unrecognized DownloadDialog response for update GUID '$Guid'."
+        }
+        $filePattern = 'downloadInformation\[(\d+)\]\.files\[(\d+)\]'
+        $fileKeys = @([regex]::Matches($Links, $filePattern) | ForEach-Object {
+            "$($_.Groups[1].Value)_$($_.Groups[2].Value)"
+        } | Select-Object -Unique)
+        foreach ($field in @('url', 'digest')) {
+            $assignments = [regex]::Matches($Links, "$filePattern\.$field\s*=")
+            $complete = [regex]::Matches($Links, "$filePattern\.$field\s*=\s*'([^']*)'\s*;")
+            if ($assignments.Count -ne $complete.Count) {
+                throw "Malformed $field assignment in DownloadDialog for update GUID '$Guid'."
+            }
+            $keys = @($complete | ForEach-Object { "$($_.Groups[1].Value)_$($_.Groups[2].Value)" })
+            if (@($keys | Select-Object -Unique).Count -ne $keys.Count) {
+                throw "Duplicate $field assignment in DownloadDialog for update GUID '$Guid'."
+            }
+        }
+        if ($fileKeys.Count -ne $DownloadMatches.Count) {
+            throw "Incomplete download file records for update GUID '$Guid'."
+        }
+    }
+
     if ($DownloadMatches.Count -eq 0) {
         Write-Verbose "No download links found in response."
+        if ($ValidateResponse) { return }
         return $null
     }
 
@@ -53,7 +86,7 @@ function Get-UpdateLinks {
             $KbNumber = [int]$Matches[1]
         }
 
-        $Sha1Base64 = ""
+        $Sha1Base64 = if ($ValidateResponse) { $null } else { "" }
         $DigestKey = "${InfoIdx}_${FileIdx}"
         if ($DigestMap.ContainsKey($DigestKey)) {
             $Sha1Base64 = $DigestMap[$DigestKey]
@@ -68,6 +101,12 @@ function Get-UpdateLinks {
         }
     }
     
+    if ($ValidateResponse) {
+        # Preserve every record for validation, including duplicate URLs. Numeric
+        # file indexes give deterministic order independent of script line order.
+        return $KbLinks | Sort-Object DownloadInfoIndex, FileIndex
+    }
+
     # Remove duplicates based on URL
     $UniqueLinks = $KbLinks | Group-Object -Property URL | ForEach-Object { $_.Group[0] }
     

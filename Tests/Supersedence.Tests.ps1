@@ -19,13 +19,11 @@ Describe 'Catalog supersedence metadata' {
             Mock Set-TempSecurityProtocol {}
         }
 
-        It 'returns empty arrays only for explicitly empty lists' {
+        It 'returns null for explicitly empty lists with a successful status' {
             $result = Get-UpdateSupersedence -Guid $updateGuid
             $result.Status | Should -Be 'Retrieved'
-            ($null -eq $result.Supersedes) | Should -BeFalse
-            ($null -eq $result.SupersededBy) | Should -BeFalse
-            $result.Supersedes.Count | Should -Be 0
-            $result.SupersededBy.Count | Should -Be 0
+            ($null -eq $result.Supersedes) | Should -BeTrue
+            ($null -eq $result.SupersededBy) | Should -BeTrue
             $result.Error | Should -BeNullOrEmpty
             Should -Invoke Write-Warning -Times 0 -Exactly
         }
@@ -35,15 +33,16 @@ Describe 'Catalog supersedence metadata' {
             $result = Get-UpdateSupersedence -Guid $updateGuid
             $result.Status | Should -Be 'Retrieved'
             $result.Supersedes.Count | Should -Be 1
+            ($result.Supersedes -is [object[]]) | Should -BeTrue
             $result.Supersedes[0].Guid | Should -Be '8cea1349-3ff8-4482-af64-9db80cb71ffb'
             $result.Supersedes[0].Title | Should -Be 'Older update & security fix (KB5043080)'
-            $result.SupersededBy.Count | Should -Be 0
+            ($null -eq $result.SupersededBy) | Should -BeTrue
         }
 
         It 'retrieves superseding updates in the correct direction without following links' {
             $detailHtml = Get-Content (Join-Path $fixtureRoot 'Supersedence.ReplacedBy.html') -Raw
             $result = Get-UpdateSupersedence -Guid $updateGuid
-            $result.Supersedes.Count | Should -Be 0
+            ($null -eq $result.Supersedes) | Should -BeTrue
             $result.SupersededBy.Count | Should -Be 2
             $result.SupersededBy[0].Guid | Should -Be 'a62b9737-1fe8-4df1-94b4-8ec61855a8d0'
             Should -Invoke Invoke-WebRequest -Times 1 -Exactly
@@ -154,6 +153,48 @@ Describe 'Get-MSCatalogUpdate supersedence integration' {
             $updates = @(Get-MSCatalogUpdate -Search 'KB5043080' -IncludeSupersedence:$false)
             $updates[0].SupersedenceStatus | Should -Be 'NotRequested'
             Should -Invoke Invoke-CatalogDetailRequests -Times 0 -Exactly
+        }
+
+        It 'returns null relationships when the Catalog explicitly reports none' {
+            $relatedHtml = Get-Content (Join-Path $fixtureRoot 'Supersedence.None.html') -Raw
+            $updates = @(Get-MSCatalogUpdate -Search 'KB5043080' -IncludeSupersedence -FromDate '2024-09-01')
+            $updates.Count | Should -Be 2
+            foreach ($update in $updates) {
+                ($null -eq $update.Supersedes) | Should -BeTrue
+                ($null -eq $update.SupersededBy) | Should -BeTrue
+                $update.SupersedenceStatus | Should -Be 'Retrieved'
+            }
+        }
+
+        It 'normalizes previously cached empty arrays to null without another request' {
+            $guid = 'fe12f49d-f2f0-4de3-a2ed-2946a5bbd7ef'
+            $script:MSCatalogSupersedenceCache[$guid] = @{
+                FetchedAt = [DateTime]::UtcNow
+                Metadata = [PSCustomObject]@{
+                    Supersedes = @()
+                    SupersededBy = @()
+                    Status = 'Retrieved'
+                    Error = $null
+                }
+            }
+            $updates = @(Get-MSCatalogUpdate -Search 'KB5043080' -IncludeSupersedence -FromDate '2024-09-01')
+            $updates.Count | Should -Be 2
+            foreach ($update in $updates) {
+                ($null -eq $update.Supersedes) | Should -BeTrue
+                ($null -eq $update.SupersededBy) | Should -BeTrue
+                $update.SupersedenceStatus | Should -Be 'Retrieved'
+            }
+            Should -Invoke Invoke-CatalogDetailRequests -Times 0 -Exactly
+        }
+
+        It 'keeps null relationships in JSON output' {
+            $relatedHtml = Get-Content (Join-Path $fixtureRoot 'Supersedence.None.html') -Raw
+            $updates = Get-MSCatalogUpdate -Search 'KB5043080' -IncludeSupersedence -FromDate '2024-09-01' -Format JSON | ConvertFrom-Json
+            foreach ($update in $updates) {
+                ($null -eq $update.Supersedes) | Should -BeTrue
+                ($null -eq $update.SupersededBy) | Should -BeTrue
+                $update.SupersedenceStatus | Should -Be 'Retrieved'
+            }
         }
 
         It 'enriches returned updates, caches duplicate GUIDs, and skips filtered updates' {

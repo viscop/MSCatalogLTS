@@ -106,6 +106,51 @@ their existing inclusion switches when needed.
 These behaviors are based on the public [Catalog FAQ](https://www.catalog.update.microsoft.com/Faq.aspx)
 and [Catalog search interface](https://www.catalog.update.microsoft.com/Search.aspx?q=Microsoft%20Server%20Operating%20System-24H2).
 
+### Retrieve Download URLs Without Downloading Files
+
+```powershell
+$updates = Get-MSCatalogUpdate `
+    -Product "Microsoft Server Operating System-24H2" `
+    -Architecture x64 -ExcludeSupersedence -IncludeDownloadUrls
+
+$updates | Select-Object Guid, Title, Downloads
+$updates | ForEach-Object { $_.Downloads } | Format-Table Url, FileName, KB, SHA1
+```
+
+`-IncludeDownloadUrls` adds one Catalog DownloadDialog request for each unique
+update GUID remaining after all filters, including supersedence exclusion. It
+works with free-text, product and operating-system searches and independently of
+`-IncludeSupersedence` and `-ExcludeSupersedence`. Pagination is unchanged. It
+retrieves metadata only: **no files are downloaded**.
+
+Every update has a `Downloads` property. Without the switch (or with
+`-IncludeDownloadUrls:$false`), it is `$null` and no requests for this metadata are
+made. The existing `-IncludeFileNames` option still makes its own requests when
+used alone; with both switches, requests are shared and deferred until filtering
+is complete.
+
+| Download entry property | Value |
+|---|---|
+| `Url` | Absolute HTTP or HTTPS download URL. Duplicate URLs appear once. |
+| `FileName` | Full original filename from the URL path, with URL escaping decoded; names are never shortened. |
+| `KB` | KB identifier (for example, `KB5078127`) when supplied by the link metadata; otherwise `$null`. |
+| `SHA1` | Uppercase 40-character hexadecimal SHA-1 digest, converted from Base64 when needed; `$null` if absent. |
+
+With `-IncludeDownloadUrls`, the existing update-level `SHA1` property is also
+populated from the first entry in `Downloads`. It remains blank if that entry has
+no digest or the response contains no files. For updates with multiple files,
+inspect `Downloads` for each file's digest; the update-level value represents only
+the first file. This reuses the same metadata without an additional request.
+
+With the switch enabled, single-file updates still have a collection; a successful response with no files
+has an empty collection. Entries are ordered by Catalog download-information and
+file indexes, retaining the first occurrence of each URL. HTTP failures,
+unrecognized or incomplete responses, malformed URLs and invalid checksums cause
+a terminating error identifying the affected update GUID. A technical failure
+does not return a partial download list. JSON and XML output retain the nested
+metadata. Default table columns remain unchanged; select or expand `Downloads`
+to inspect the entries.
+
 ### Example 1: Search for Windows 11 Updates
 
 ```powershell
@@ -196,12 +241,13 @@ explicitly. `-IncludeSuperseded` is also accepted as an alias for
 
 | Property | Structure / meaning |
 |----------|---------------------|
-| `Supersedes` | Array of updates replaced by this update. Each entry has `Guid` (Catalog update GUID, or `$null` when unavailable) and `Title` (decoded Catalog title, which may contain a KB number). |
-| `SupersededBy` | Array of updates that replace this update, with the same entry structure. |
+| `Supersedes` | Array of updates replaced by this update, or `$null` if none exist. Each entry has `Guid` (Catalog update GUID, or `$null` when unavailable) and `Title` (decoded Catalog title, which may contain a KB number). |
+| `SupersededBy` | Array of updates that replace this update, with the same entry structure; `$null` if none exist. |
 | `SupersedenceStatus` | `Retrieved`: both lists were parsed and all entries have GUIDs. `Partial`: both lists were parsed, but some entries have only a title. `Failed`: the request or metadata validation failed. `NotRequested`: the switch was omitted or false. |
 | `SupersedenceError` | Explanation for `Partial` or `Failed`; otherwise empty. |
 
-A confirmed `n/a` list becomes an empty array. If either list is missing or
+A confirmed `n/a` list becomes `$null`; `SupersedenceStatus` still identifies a
+successful lookup (`Retrieved` or `Partial`). If either list is missing or
 malformed, both relationship properties remain `$null`, status is `Failed`, and a
 warning is emitted. A failed lookup must not be interpreted as having no relationships.
 Title-only entries are retained with a null GUID; the module does not guess GUIDs
