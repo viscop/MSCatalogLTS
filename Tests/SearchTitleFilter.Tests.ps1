@@ -55,7 +55,17 @@ Describe 'Optional literal case-insensitive TitleContains filtering' {
                 ExcludeSuperseded = $true
                 AllPages = $true
             }
-            Mock Get-UpdateSupersedenceBatch { @{} }
+            # Return an explicit successful snapshot, not missing metadata: the
+            # lazy selector must distinguish failures from confirmed empty lists.
+            Mock Get-UpdateSupersedenceBatch {
+                $metadata = @{}
+                foreach ($guid in $Guids) {
+                    $metadata[$guid] = [PSCustomObject]@{
+                        Supersedes = $null; SupersededBy = $null; Status = 'Retrieved'; Error = $null
+                    }
+                }
+                $metadata
+            }
             $query = 'Cumulative Update for .NET Framework 3.5 and 4.8.1 server 24H2 x64'
             # The mocked Catalog returns four candidates. Search alone must not
             # reject them for lacking the abbreviated query as one exact phrase.

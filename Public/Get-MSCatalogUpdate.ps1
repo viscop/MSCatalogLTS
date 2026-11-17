@@ -13,6 +13,15 @@ function Get-MSCatalogUpdate {
     The comparison is literal and case-insensitive. Alias: TitelContains.
     Applies locally before supersedence and download metadata retrieval and does
     not change the Catalog query. Requires Search, Product or OperatingSystem.
+    .PARAMETER IncludeSupersedence
+    Retrieves supersedence metadata for all returned updates. Without exclusion,
+    uses batched requests. With ExcludeSuperseded, only retained candidates need
+    metadata; their lookup status and any errors remain available on the results.
+    .PARAMETER ExcludeSuperseded
+    Resolves supersedence sequentially from newest to oldest after all filters.
+    Immediately skips confirmed replaced candidates, using GUID relationships or
+    an exact, unique title when no relationship GUID is supplied. Includes metadata
+    for every retained candidate; failed lookups remain Failed and can be retried.
     .PARAMETER IncludeDownloadUrls
     Retrieves download metadata after all filters and supersedence exclusion.
     Makes one additional Catalog DownloadDialog request per unique returned GUID.
@@ -222,6 +231,8 @@ function Get-MSCatalogUpdate {
             if ($PSBoundParameters.ContainsKey('FromDate') -and $PSBoundParameters.ContainsKey('ToDate') -and $FromDate -gt $ToDate) {
                 throw '-FromDate must be earlier than or equal to -ToDate.'
             }
+            # Preserve metadata output/serialization; the lazy selector below owns
+            # retrieval during exclusion rather than the eager inclusion branch.
             $IncludeSupersedence = $true
         }
         if ($PSCmdlet.ParameterSetName -eq 'Search' -and $PSBoundParameters.ContainsKey('Version')) {
@@ -898,7 +909,9 @@ function Get-MSCatalogUpdate {
             }
             #endregion Apply Filters
 
-            if ($IncludeSupersedence) {
+            if ($ExcludeSuperseded) {
+                $Updates = @(Select-NonSupersededUpdate -Updates @($Updates) -ResolveSupersedence)
+            } elseif ($IncludeSupersedence) {
                 $supersedenceResults = Get-UpdateSupersedenceBatch -Guids @($Updates | ForEach-Object { $_.Guid })
                 foreach ($update in $Updates) {
                     $metadata = $supersedenceResults[$update.Guid]
@@ -908,10 +921,6 @@ function Get-MSCatalogUpdate {
                     $update.SupersedenceStatus = $metadata.Status
                     $update.SupersedenceError = $metadata.Error
                 }
-            }
-
-            if ($ExcludeSuperseded) {
-                $Updates = @(Select-NonSupersededUpdate -Updates @($Updates))
             }
 
             if ($IncludeDownloadUrls) {

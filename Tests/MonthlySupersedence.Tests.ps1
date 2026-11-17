@@ -60,7 +60,9 @@ Describe 'Supersedence filtering within selected dates' {
             $rendered = $updates | Out-String -Width 250
             $rendered | Should -Match 'Title\s+Products\s+Classification\s+LastUpdated\s+Size'
             $rendered | Should -Not -Match 'Supersedes|SupersededBy|SupersedenceStatus|KB5122871'
-            Should -Invoke Invoke-CatalogDetailRequests -Times 1 -Exactly -ParameterFilter { $Guids.Count -eq 3 -and $Guids -notcontains $octoberGuid }
+            # This fixture reports replacements only on the older update's page,
+            # so lazy resolution still needs three sequential singleton requests.
+            Should -Invoke Invoke-CatalogDetailRequests -Times 3 -Exactly -ParameterFilter { $Guids.Count -eq 1 -and $Guids -notcontains $octoberGuid }
         }
 
         It 'does not exclude September updates because of October replacements' {
@@ -94,7 +96,7 @@ Describe 'Supersedence filtering within selected dates' {
             $updates.Guid | Should -Contain $newerGuid
             $updates.Guid | Should -Contain $netGuid
             $updates.Guid | Should -Not -Contain $olderGuid
-            Should -Invoke Invoke-CatalogDetailRequests -Times 1 -Exactly -ParameterFilter { $Guids.Count -eq 3 -and $Guids -notcontains $octoberGuid }
+            Should -Invoke Invoke-CatalogDetailRequests -Times 3 -Exactly -ParameterFilter { $Guids.Count -eq 1 -and $Guids -notcontains $octoberGuid }
         }
 
         It 'ignores a replacement outside a narrower date interval' {
@@ -188,7 +190,7 @@ Describe 'Supersedence filtering within selected dates' {
             $updates.Count | Should -Be 2
             $updates.Guid | Should -Contain $newerGuid
             $updates.Guid | Should -Contain $netGuid
-            Should -Invoke Invoke-CatalogDetailRequests -Times 1 -Exactly -ParameterFilter { $Guids.Count -eq 3 }
+            Should -Invoke Invoke-CatalogDetailRequests -Times 3 -Exactly -ParameterFilter { $Guids.Count -eq 1 }
         }
 
         It 'applies Date in the OS parameter set' {

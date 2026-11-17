@@ -149,9 +149,12 @@ Describe 'Catalog product search' {
             $updates.Guid | Should -Contain $secondGuid
             $updates.Guid | Should -Contain $frameworkGuid
             $updates.Guid | Should -Not -Contain $firstGuid
-            Should -Invoke Get-UpdateSupersedenceBatch -Times 1 -Exactly -ParameterFilter {
-                $Guids.Count -eq 3 -and $Guids -notcontains $wrongProductGuid -and $Guids -notcontains $octoberGuid
+            # Reverse-only evidence requires looking up each eligible GUID, now
+            # sequentially instead of in one eager batch.
+            Should -Invoke Get-UpdateSupersedenceBatch -Times 3 -Exactly -ParameterFilter {
+                $Guids.Count -eq 1 -and $Guids -notcontains $wrongProductGuid -and $Guids -notcontains $octoberGuid
             }
+            Should -Invoke Get-UpdateSupersedenceBatch -Times 0 -Exactly -ParameterFilter { $Guids -contains $wrongProductGuid -or $Guids -contains $octoberGuid }
         }
 
         It 'does not remove a matching update because of a replacement in another product' {
@@ -160,7 +163,8 @@ Describe 'Catalog product search' {
             $updates = @(Get-MSCatalogUpdate -Product $productName -ExcludeSuperseded)
             $updates.Guid | Should -Contain $firstGuid
             $updates.Guid | Should -Not -Contain $secondGuid
-            Should -Invoke Get-UpdateSupersedenceBatch -Times 1 -Exactly -ParameterFilter { $Guids -notcontains $secondGuid }
+            Should -Invoke Get-UpdateSupersedenceBatch -Times 3 -Exactly -ParameterFilter { $Guids.Count -eq 1 -and $Guids -notcontains $secondGuid }
+            Should -Invoke Get-UpdateSupersedenceBatch -Times 0 -Exactly -ParameterFilter { $Guids -contains $secondGuid }
         }
 
         It 'can include supersedence metadata without excluding matching results' {

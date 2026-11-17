@@ -259,5 +259,55 @@ Describe 'Incremental supersedence resolution from newest to oldest' {
             $new.SupersedenceStatus | Should -Be 'Retrieved'
             Should -Invoke Get-UpdateSupersedenceBatch -Times 1 -Exactly
         }
+
+        It 'does not let an eliminated ambiguity become a unique title relationship' {
+            $old.Title = 'Same title'
+            $independent.Title = 'Same title'
+            $metadataById[$newGuid].Supersedes = @([PSCustomObject]@{ Guid = $oldGuid; Title = 'Same title' })
+            $metadataById[$independentGuid].SupersededBy = @([PSCustomObject]@{ Guid = $null; Title = 'Same title' })
+            $results = @(Select-NonSupersededUpdate -Updates $candidates -ResolveSupersedence)
+            $results.Guid | Should -Be @($newGuid, $independentGuid)
+            @($requestOrder) | Should -Be @($newGuid, $independentGuid)
+        }
+
+        It 'follows confirmed replacement chains to a retained candidate' {
+            $metadataById[$newGuid].Supersedes = @([PSCustomObject]@{ Guid = $independentGuid; Title = 'Intermediate' })
+            $metadataById[$oldGuid].SupersededBy = @([PSCustomObject]@{ Guid = $independentGuid; Title = 'Intermediate' })
+            $results = @(Select-NonSupersededUpdate -Updates $candidates -ResolveSupersedence)
+            $results.Guid | Should -Be @($newGuid)
+            @($requestOrder) | Should -Be @($newGuid, $oldGuid)
+        }
+
+        It 'does not let contradictory cycles eliminate every candidate' {
+            $metadataById[$newGuid].SupersededBy = @([PSCustomObject]@{ Guid = $oldGuid; Title = 'Replacement' })
+            $metadataById[$oldGuid].SupersededBy = @([PSCustomObject]@{ Guid = $newGuid; Title = 'Replacement' })
+            $results = @(Select-NonSupersededUpdate -Updates $candidates -ResolveSupersedence)
+            $results.Guid | Should -Be @($oldGuid, $independentGuid)
+            @($requestOrder) | Should -Be @($newGuid, $independentGuid, $oldGuid)
+        }
+
+        It 'copies supplied successful metadata to duplicate rows without another lookup' {
+            $new.SupersedenceStatus = 'Partial'
+            $new.SupersedenceError = 'Title-only entries'
+            $new.Supersedes = @([PSCustomObject]@{ Guid = $null; Title = 'Unresolved' })
+            $duplicate = New-IncrementalCandidate $newGuid '2026-10-27'
+            $results = @(Select-NonSupersededUpdate -Updates @($new, $duplicate) -ResolveSupersedence)
+            $results.SupersedenceStatus | Should -Be @('Partial', 'Partial')
+            $duplicate.SupersedenceError | Should -Be 'Title-only entries'
+            Should -Invoke Get-UpdateSupersedenceBatch -Times 0 -Exactly
+        }
+
+        It 'reports missing batch metadata as failed rather than confirmed empty relationships' -ForEach @(
+            @{ Case = 'a missing GUID'; EmptyBatch = @{} }
+            @{ Case = 'a missing batch'; EmptyBatch = $null }
+        ) {
+            Mock Get-UpdateSupersedenceBatch { $EmptyBatch }
+            Mock Write-Warning {}
+            $results = @(Select-NonSupersededUpdate -Updates @($new) -ResolveSupersedence)
+            $results.Count | Should -Be 1
+            $new.SupersedenceStatus | Should -Be 'Failed'
+            $new.SupersedenceError | Should -Match 'No supersedence metadata'
+            Should -Invoke Write-Warning -Times 1 -Exactly
+        }
     }
 }

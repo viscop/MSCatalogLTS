@@ -246,12 +246,14 @@ $updates | Select-Object Guid, Supersedes, SupersededBy, SupersedenceStatus
 $updates[0].SupersededBy | Format-Table Guid, Title
 ```
 
-`-IncludeSupersedence` fetches detail pages for unique update GUIDs remaining after
-filtering, with up to four concurrent requests and a 20-second timeout per request.
+`-IncludeSupersedence` without exclusion fetches detail pages for all unique update
+GUIDs remaining after filtering, with up to four concurrent requests and a
+20-second timeout per request. `-ExcludeSuperseded` uses the lazy strategy described
+below, including when both switches are supplied.
 Successful results (including title-only relationships) are cached for five minutes
 in the module session, up to 256 updates; failed lookups are retried on the next
 command invocation. Reimporting the module with `-Force` clears this cache.
-Without the switch, no supersedence requests are made, the relationship
+Without either switch, no supersedence requests are made, the relationship
 properties remain `$null`, and `SupersedenceStatus` is `NotRequested`.
 
 The default output always uses the normal table (`Title`, `Products`,
@@ -265,15 +267,17 @@ explicitly. `-IncludeSuperseded` is also accepted as an alias for
 |----------|---------------------|
 | `Supersedes` | Array of updates replaced by this update, or `$null` if none exist. Each entry has `Guid` (Catalog update GUID, or `$null` when unavailable) and `Title` (decoded Catalog title, which may contain a KB number). |
 | `SupersededBy` | Array of updates that replace this update, with the same entry structure; `$null` if none exist. |
-| `SupersedenceStatus` | `Retrieved`: both lists were parsed and all entries have GUIDs. `Partial`: both lists were parsed, but some entries have only a title. `Failed`: the request or metadata validation failed. `NotRequested`: the switch was omitted or false. |
+| `SupersedenceStatus` | `Retrieved`: both lists were parsed and all entries have GUIDs. `Partial`: both lists were parsed, but some entries have only a title. `Failed`: the request or metadata validation failed. `NotRequested`: no lookup was requested. |
 | `SupersedenceError` | Explanation for `Partial` or `Failed`; otherwise empty. |
 
 A confirmed `n/a` list becomes `$null`; `SupersedenceStatus` still identifies a
 successful lookup (`Retrieved` or `Partial`). If either list is missing or
 malformed, both relationship properties remain `$null`, status is `Failed`, and a
 warning is emitted. A failed lookup must not be interpreted as having no relationships.
-Title-only entries are retained with a null GUID; the module does not guess GUIDs
-from titles or KB numbers. Use JSON (`-Format JSON` or `-ExportJson`) to preserve
+Title-only entries are retained with a null GUID. During exclusion, a title may
+identify a unique eligible candidate locally, without modifying the original
+metadata or its `Partial` status. KB-only or fuzzy matches are never used.
+Use JSON (`-Format JSON` or `-ExportJson`) to preserve
 the nested entries; CSV does not preserve nested relationship objects.
 
 This feature reads the public detail page's **Package Details** HTML, including
@@ -315,21 +319,42 @@ Get-MSCatalogUpdate `
 `-ExcludeSuperseded` works with every existing date filter: `-Date`, a date token
 in `-Search`, `-FromDate` and `-ToDate` (separately or together), and `-LastDays`.
 It also works without a date filter and includes supersedence metadata automatically.
-All existing search filters are applied before comparing relationships.
+All existing search filters, including `-TitleContains`, are applied before
+comparing relationships.
+Without an explicit date filter, candidates from every month remain eligible;
+there is no automatic restriction to the newest month. Supersedence exclusion
+removes historical candidates only when confirmed relationships justify it.
 `-Date` and date tokens in `-Search` match title text (for example `2026-09`);
 they are not interpreted as publication dates. `-FromDate`, `-ToDate`, and
 `-LastDays` use `LastUpdated`. Date ranges may span multiple months. Both bounds are inclusive, so use
 `-ToDate "2026-09-30"` for the end of September (`2026-10-01` includes October 1).
-The filter then removes an update only if a `SupersededBy` GUID
-matches another update in those filtered results. For example, if September update
+The filter then resolves active candidates sequentially by `LastUpdated`
+descending, with GUID ascending as a deterministic tie-breaker. A newer date alone
+does not establish supersedence. Both `Supersedes` and `SupersededBy` can prove a
+replacement within the original eligible set. Confirmed replaced candidates are
+eliminated immediately and their detail pages are not requested. For example,
+when A replaces B, C and D and independent E replaces F, six candidates need only
+two detail requests (A and E). If Microsoft reports replacements only in reverse
+on the older updates, more lookups may still be necessary. Final `-SortBy` and
+`-Descending` output options remain independent of this processing order.
+
+For example, if September update
 A is replaced by September update B, A is omitted and B is kept. When only
 September is selected, an October replacement does not exclude a September result. Independent updates, such as
-Windows and .NET updates, are evaluated separately using their GUID relationships.
+Windows and .NET updates, are evaluated separately using their relationships.
+
+GUIDs are the primary relationship identity. Without a GUID, a relationship title
+can identify a candidate only if its entire normalized title uniquely matches
+one eligible GUID. Normalization only decodes HTML entities, collapses whitespace
+and ignores case. Duplicate rows with the same GUID share one identity; different
+GUIDs with the same title remain ambiguous even if one was already eliminated.
+An explicit external GUID is never overridden by a local title match. Substrings,
+KB numbers, version aliases and fuzzy matches do not establish identity.
 
 All other search filters still apply. A replacement excluded by those filters
 (for example a preview without `-IncludePreview`) is not used to remove a result.
 Use `-AllPages` to consider all available result pages. Failed lookups and
-relationships without usable GUIDs do not cause an update to be removed; check
+unresolved or ambiguous relationships do not prove that an update is replaced; check
 `SupersedenceStatus` and `SupersedenceError` for incomplete metadata. The relationship
 properties retain the full current Catalog metadata, including other months.
 `LastUpdated` can change later. If several date filters are specified, their
@@ -337,6 +362,18 @@ intersection is used. With only `-FromDate`, newer replacements can be included;
 use `-ToDate` as well when an upper cutoff is needed. This
 is filtering within the selected results, not reconstruction of a historical
 Catalog snapshot or resolution of a complete servicing baseline.
+
+Every retained candidate is evaluated and carries its lookup status and metadata,
+including when `-IncludeSupersedence` is explicitly combined with exclusion.
+Skipped candidates are removed from the results; the optimization does not return
+unevaluated results as though their metadata were complete. Successful cache entries
+are reused under the existing five-minute policy, duplicate GUIDs are resolved
+once, and failed lookups remain eligible for retry on the next invocation.
+`-Verbose` reports initial and remaining counts, metadata lookups, supplied metadata
+reuse, individual cache hits, eliminations and total resolution duration. No extra
+Catalog searches, patch-month selection or requests for external relationships
+are performed. Published relationship arrays are not expanded transitively;
+confirmed in-set replacement chains are used only to retain a valid replacement.
 
 ## 📚 Available Functions
 

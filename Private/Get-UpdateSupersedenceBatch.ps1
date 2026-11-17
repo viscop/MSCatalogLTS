@@ -24,6 +24,7 @@ function Get-UpdateSupersedenceBatch {
         if ($seen.ContainsKey($guid)) { continue }
         $seen[$guid] = $true
         if ($cache.ContainsKey($guid)) {
+            Write-Verbose "Reusing cached supersedence metadata for $guid."
             $results[$guid] = $cache[$guid].Metadata
         } else {
             $missing += $guid
