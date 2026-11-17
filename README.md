@@ -49,7 +49,7 @@ Get-Module -ListAvailable MSCatalogLTS
 ### Search Text and Catalog Products
 
 ```powershell
-# Free-text search (existing behavior)
+# Free-text Catalog search
 Get-MSCatalogUpdate -Search "Cumulative Update"
 
 # Product-only candidate search, followed by exact product filtering
@@ -57,12 +57,34 @@ Get-MSCatalogUpdate -Product "Microsoft Server Operating System-24H2" -AllPages
 
 # Free-text search AND exact product filtering
 Get-MSCatalogUpdate -Search "Cumulative Update" -Product "Microsoft Server Operating System-24H2" -AllPages
+
+# Short Catalog query with an optional, independent title phrase
+Get-MSCatalogUpdate `
+    -Search "Cumulative Update for .NET Framework 3.5 and 4.8.1 server 24H2 x64" `
+    -TitleContains "Cumulative Update for .NET Framework 3.5 and 4.8.1" `
+    -Product "Microsoft Server Operating System-24H2" `
+    -Architecture x64 -ToDate "2026-11-30" -ExcludeSuperseded -AllPages
 ```
 
 `-Search` uses the Catalog's free-text search, including its existing smart OS
-query handling. The Catalog searches multiple fields, including titles,
-descriptions, applicable products, classifications, and KB numbers; a text match
-does not imply that the **Products** column contains a particular product.
+query handling. The search text does not have to occur as a complete phrase in
+the title. No additional local title comparison is performed unless
+`-TitleContains` is specified; the existing OS, update-type and other filters
+still apply.
+
+`-TitleContains` (alias `-TitelContains`) is an optional local title filter. Its
+complete phrase must occur in the title, ignoring case. Punctuation and spaces
+are literal; wildcards are not expanded. HTML title entities are decoded for the
+comparison. For example, `-TitleContains "operating system 24H2"` does not match
+`operating system version 24H2`. Omit the filter to keep the Catalog candidates,
+or use a shorter phrase such as `.NET Framework 3.5 and 4.8.1`.
+
+The title phrase is not sent to the Catalog and does not increase the query
+length. It works with `-Search`, product-only and structured OS searches, on all
+retrieved pages, before supersedence and download metadata retrieval. It must be
+combined with a search source (`-Search`, `-Product` or `-OperatingSystem`);
+empty, null and whitespace-only title phrases are rejected. A title match does
+not imply that the **Products** column contains a particular product.
 
 `-Product` filters the actual **Products** column for a complete, case-insensitive
 product name. An update associated with several products matches if any individual
