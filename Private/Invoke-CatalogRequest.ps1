@@ -23,8 +23,12 @@ function Invoke-CatalogRequest {
         }
 
         $Results = Invoke-WebRequest @Params
+        $content = if ($null -ne $Results.Content) { [string] $Results.Content } else { [string] $Results.RawContent }
+        if ([string]::IsNullOrWhiteSpace($content)) {
+            throw "The Catalog returned an empty response for $Uri. Please try again later."
+        }
         $HtmlDoc = [HtmlAgilityPack.HtmlDocument]::new()
-        $HtmlDoc.LoadHtml($Results.RawContent.ToString())
+        $HtmlDoc.LoadHtml($content)
         $NoResults = $HtmlDoc.GetElementbyId("ctl00_catalogBody_noResultText")
         $ErrorText = $HtmlDoc.GetElementbyId("errorPageDisplayedError")
 
@@ -41,6 +45,7 @@ function Invoke-CatalogRequest {
         }
     } catch {
         Write-Warning "$_"
+        Write-Debug "Catalog response processing failed for ${Uri}: $($_.ScriptStackTrace)"
     } finally {
        Set-TempSecurityProtocol -ResetToDefault
     }

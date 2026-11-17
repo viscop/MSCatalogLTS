@@ -51,7 +51,7 @@ Describe 'Supersedence filtering within selected dates' {
         }
 
         It 'removes an older September update, keeps its September replacement and independent .NET update' {
-            $updates = @(Get-MSCatalogUpdate -Search 'Server 24H2' -Architecture x64 -Date '2026-09' -AllPages -ExcludeSuperseded)
+            $updates = @(Get-MSCatalogUpdate -Search '24H2' -Architecture x64 -Date '2026-09' -AllPages -ExcludeSuperseded)
             $updates.Count | Should -Be 2
             $updates.Guid | Should -Contain $newerGuid
             $updates.Guid | Should -Contain $netGuid
@@ -60,12 +60,14 @@ Describe 'Supersedence filtering within selected dates' {
             $rendered = $updates | Out-String -Width 250
             $rendered | Should -Match 'Title\s+Products\s+Classification\s+LastUpdated\s+Size'
             $rendered | Should -Not -Match 'Supersedes|SupersededBy|SupersedenceStatus|KB5122871'
-            Should -Invoke Invoke-CatalogDetailRequests -Times 1 -Exactly -ParameterFilter { $Guids.Count -eq 3 -and $Guids -notcontains $octoberGuid }
+            # This fixture reports replacements only on the older update's page,
+            # so lazy resolution still needs three sequential singleton requests.
+            Should -Invoke Invoke-CatalogDetailRequests -Times 3 -Exactly -ParameterFilter { $Guids.Count -eq 1 -and $Guids -notcontains $octoberGuid }
         }
 
         It 'does not exclude September updates because of October replacements' {
             $targetsByGuid[$olderGuid] = @($octoberGuid)
-            $updates = @(Get-MSCatalogUpdate -Search 'Server 24H2' -Date '2026-09' -ExcludeSuperseded)
+            $updates = @(Get-MSCatalogUpdate -Search '24H2' -Date '2026-09' -ExcludeSuperseded)
             $updates.Count | Should -Be 3
             $updates.Guid | Should -Contain $olderGuid
             ($updates | Where-Object Guid -eq $newerGuid).SupersededBy[0].Guid | Should -Be $octoberGuid
@@ -74,7 +76,7 @@ Describe 'Supersedence filtering within selected dates' {
         It 'passes every remaining update to the downstream pipeline command' {
             # Verify the search output independently of the downloader implementation.
             Mock Save-MSCatalogUpdate {}
-            Get-MSCatalogUpdate -Search 'Server 24H2' -Date '2026-09' -ExcludeSuperseded |
+            Get-MSCatalogUpdate -Search '24H2' -Date '2026-09' -ExcludeSuperseded |
                 Save-MSCatalogUpdate -DownloadAll | Out-Null
             Should -Invoke Save-MSCatalogUpdate -Times 2 -Exactly
             Should -Invoke Save-MSCatalogUpdate -Times 1 -Exactly -ParameterFilter { $Update.Guid -eq $newerGuid }
@@ -83,22 +85,22 @@ Describe 'Supersedence filtering within selected dates' {
         }
 
         It 'keeps all monthly results when only metadata is requested' {
-            $updates = @(Get-MSCatalogUpdate -Search 'Server 24H2' -Date '2026-09' -IncludeSupersedence)
+            $updates = @(Get-MSCatalogUpdate -Search '24H2' -Date '2026-09' -IncludeSupersedence)
             $updates.Count | Should -Be 3
             $updates.Guid | Should -Contain $olderGuid
         }
 
         It 'accepts the original FromDate and ToDate command without Date' {
-            $updates = @(Get-MSCatalogUpdate -Architecture x64 -Search 'Server 24H2' -FromDate '2026-09-01' -ToDate '2026-10-01' -ExcludeSuperseded)
+            $updates = @(Get-MSCatalogUpdate -Architecture x64 -Search '24H2' -FromDate '2026-09-01' -ToDate '2026-10-01' -ExcludeSuperseded)
             $updates.Count | Should -Be 2
             $updates.Guid | Should -Contain $newerGuid
             $updates.Guid | Should -Contain $netGuid
             $updates.Guid | Should -Not -Contain $olderGuid
-            Should -Invoke Invoke-CatalogDetailRequests -Times 1 -Exactly -ParameterFilter { $Guids.Count -eq 3 -and $Guids -notcontains $octoberGuid }
+            Should -Invoke Invoke-CatalogDetailRequests -Times 3 -Exactly -ParameterFilter { $Guids.Count -eq 1 -and $Guids -notcontains $octoberGuid }
         }
 
         It 'ignores a replacement outside a narrower date interval' {
-            $updates = @(Get-MSCatalogUpdate -Search 'Server 24H2' -FromDate '2026-09-01' -ToDate '2026-09-10' -ExcludeSuperseded)
+            $updates = @(Get-MSCatalogUpdate -Search '24H2' -FromDate '2026-09-01' -ToDate '2026-09-10' -ExcludeSuperseded)
             $updates.Count | Should -Be 2
             $updates.Guid | Should -Contain $olderGuid
             $updates.Guid | Should -Contain $netGuid
@@ -106,7 +108,7 @@ Describe 'Supersedence filtering within selected dates' {
         }
 
         It 'compares all returned candidates when the interval spans multiple months' {
-            $updates = @(Get-MSCatalogUpdate -Search 'Server 24H2' -FromDate '2026-09-01' -ToDate '2026-10-31' -ExcludeSuperseded)
+            $updates = @(Get-MSCatalogUpdate -Search '24H2' -FromDate '2026-09-01' -ToDate '2026-10-31' -ExcludeSuperseded)
             $updates.Count | Should -Be 2
             $updates.Guid | Should -Contain $octoberGuid
             $updates.Guid | Should -Contain $netGuid
@@ -115,7 +117,7 @@ Describe 'Supersedence filtering within selected dates' {
         }
 
         It 'includes updates on both date boundaries without inheriting the current time' {
-            $updates = @(Get-MSCatalogUpdate -Search 'Server 24H2' -FromDate '2026-09-08' -ToDate '2026-09-08' -ExcludeSuperseded)
+            $updates = @(Get-MSCatalogUpdate -Search '24H2' -FromDate '2026-09-08' -ToDate '2026-09-08' -ExcludeSuperseded)
             $updates.Count | Should -Be 2
             $updates.Guid | Should -Contain $olderGuid
             $updates.Guid | Should -Contain $netGuid
@@ -124,14 +126,14 @@ Describe 'Supersedence filtering within selected dates' {
 
         It 'uses LastUpdated for a range even when the update title specifies September' {
             $searchHtml = $searchHtml.Replace('9/14/2026', '10/20/2026')
-            $updates = @(Get-MSCatalogUpdate -Search 'Server 24H2' -FromDate '2026-09-01' -ToDate '2026-09-30' -ExcludeSuperseded)
+            $updates = @(Get-MSCatalogUpdate -Search '24H2' -FromDate '2026-09-01' -ToDate '2026-09-30' -ExcludeSuperseded)
             $updates.Count | Should -Be 2
             $updates.Guid | Should -Contain $olderGuid
             $updates.Guid | Should -Not -Contain $newerGuid
         }
 
         It 'intersects a title month and LastUpdated range when both are specified' {
-            $updates = @(Get-MSCatalogUpdate -Search 'Server 24H2' -Date '2026-09' -FromDate '2026-09-01' -ToDate '2026-09-10' -ExcludeSuperseded)
+            $updates = @(Get-MSCatalogUpdate -Search '24H2' -Date '2026-09' -FromDate '2026-09-01' -ToDate '2026-09-10' -ExcludeSuperseded)
             $updates.Count | Should -Be 2
             $updates.Guid | Should -Contain $olderGuid
             $updates.Guid | Should -Contain $netGuid
@@ -139,7 +141,7 @@ Describe 'Supersedence filtering within selected dates' {
 
         It 'retains a result on lookup failure with a date interval' {
             $failedGuid = $olderGuid
-            $updates = @(Get-MSCatalogUpdate -Search 'Server 24H2' -FromDate '2026-09-01' -ToDate '2026-09-30' -ExcludeSuperseded)
+            $updates = @(Get-MSCatalogUpdate -Search '24H2' -FromDate '2026-09-01' -ToDate '2026-09-30' -ExcludeSuperseded)
             $updates.Count | Should -Be 3
             ($updates | Where-Object Guid -eq $olderGuid).SupersedenceStatus | Should -Be 'Failed'
         }
@@ -149,7 +151,7 @@ Describe 'Supersedence filtering within selected dates' {
             @{ Selection = 'FromDate alone'; Bounds = @{ FromDate = '2026-09-01' }; ExpectedGuid = '1abba66b-03c6-467e-9819-96844606cb15'; ExpectedCount = 2 }
             @{ Selection = 'ToDate alone'; Bounds = @{ ToDate = '2026-09-30' }; ExpectedGuid = '797fec39-6d79-43b7-8585-8d95c6017cc3'; ExpectedCount = 2 }
         ) {
-            $updates = @(Get-MSCatalogUpdate -Search 'Server 24H2' @Bounds -ExcludeSuperseded)
+            $updates = @(Get-MSCatalogUpdate -Search '24H2' @Bounds -ExcludeSuperseded)
             $updates.Count | Should -Be $ExpectedCount
             $updates.Guid | Should -Contain $ExpectedGuid
             $updates.Guid | Should -Contain $netGuid
@@ -165,7 +167,7 @@ Describe 'Supersedence filtering within selected dates' {
                 if ($Year -and $Month -and $Day) { [datetime]::new($Year, $Month, $Day) }
                 else { [datetime] '2026-09-15' }
             }
-            $updates = @(Get-MSCatalogUpdate -Search 'Server 24H2' -LastDays $Days -ExcludeSuperseded)
+            $updates = @(Get-MSCatalogUpdate -Search '24H2' -LastDays $Days -ExcludeSuperseded)
             $updates.Count | Should -Be $ExpectedCount
             $updates.Guid | Should -Contain $newerGuid
             $updates.Guid | Should -Not -Contain $octoberGuid
@@ -177,18 +179,18 @@ Describe 'Supersedence filtering within selected dates' {
                 if ($Year -and $Month -and $Day) { [datetime]::new($Year, $Month, $Day) }
                 else { [datetime] '2026-09-15' }
             }
-            $updates = @(Get-MSCatalogUpdate -Search 'Server 24H2' -LastDays 7 -ToDate '2026-09-10' -ExcludeSuperseded)
+            $updates = @(Get-MSCatalogUpdate -Search '24H2' -LastDays 7 -ToDate '2026-09-10' -ExcludeSuperseded)
             $updates.Count | Should -Be 2
             $updates.Guid | Should -Contain $olderGuid
             $updates.Guid | Should -Contain $netGuid
         }
 
         It 'supports a month token supplied only in the search text' {
-            $updates = @(Get-MSCatalogUpdate -Search '2026-09 Server 24H2' -ExcludeSuperseded)
+            $updates = @(Get-MSCatalogUpdate -Search '2026-09 Cumulative Update' -ExcludeSuperseded)
             $updates.Count | Should -Be 2
             $updates.Guid | Should -Contain $newerGuid
             $updates.Guid | Should -Contain $netGuid
-            Should -Invoke Invoke-CatalogDetailRequests -Times 1 -Exactly -ParameterFilter { $Guids.Count -eq 3 }
+            Should -Invoke Invoke-CatalogDetailRequests -Times 3 -Exactly -ParameterFilter { $Guids.Count -eq 1 }
         }
 
         It 'applies Date in the OS parameter set' {
@@ -198,7 +200,7 @@ Describe 'Supersedence filtering within selected dates' {
         }
 
         It 'does not reuse the month token from a preceding call in the OS parameter set' {
-            $first = @(Get-MSCatalogUpdate -Search '2026-09 Server 24H2' -ExcludeSuperseded)
+            $first = @(Get-MSCatalogUpdate -Search '2026-09 Cumulative Update' -ExcludeSuperseded)
             $second = @(Get-MSCatalogUpdate -OperatingSystem 'Windows Server' -Version '2025' -FromDate '2026-10-01' -ExcludeSuperseded)
             $first.Guid | Should -Contain $newerGuid
             $second.Count | Should -Be 1
@@ -206,35 +208,35 @@ Describe 'Supersedence filtering within selected dates' {
         }
 
         It 'rejects a reversed date interval before requesting metadata' {
-            { Get-MSCatalogUpdate -Search 'Server 24H2' -FromDate '2026-10-01' -ToDate '2026-09-01' -ExcludeSuperseded } | Should -Throw '*earlier than or equal*'
+            { Get-MSCatalogUpdate -Search '24H2' -FromDate '2026-10-01' -ToDate '2026-09-01' -ExcludeSuperseded } | Should -Throw '*earlier than or equal*'
             Should -Invoke Invoke-WebRequest -Times 0 -Exactly
             Should -Invoke Invoke-CatalogDetailRequests -Times 0 -Exactly
         }
 
         It 'keeps a result whose supersedence lookup failed' {
             $failedGuid = $olderGuid
-            $updates = @(Get-MSCatalogUpdate -Search 'Server 24H2' -Date '2026-09' -ExcludeSuperseded)
+            $updates = @(Get-MSCatalogUpdate -Search '24H2' -Date '2026-09' -ExcludeSuperseded)
             $updates.Count | Should -Be 3
             ($updates | Where-Object Guid -eq $olderGuid).SupersedenceStatus | Should -Be 'Failed'
         }
 
         It 'does not infer exclusions from title-only relationships' {
             $titleOnlyGuid = $olderGuid
-            $updates = @(Get-MSCatalogUpdate -Search 'Server 24H2' -Date '2026-09' -ExcludeSuperseded)
+            $updates = @(Get-MSCatalogUpdate -Search '24H2' -Date '2026-09' -ExcludeSuperseded)
             $updates.Count | Should -Be 3
             ($updates | Where-Object Guid -eq $olderGuid).SupersedenceStatus | Should -Be 'Partial'
         }
 
         It 'does not use an excluded preview to remove a result' {
             $targetsByGuid[$newerGuid] = @($previewGuid)
-            $updates = @(Get-MSCatalogUpdate -Search 'Server 24H2' -Date '2026-09' -ExcludeSuperseded)
+            $updates = @(Get-MSCatalogUpdate -Search '24H2' -Date '2026-09' -ExcludeSuperseded)
             $updates.Guid | Should -Contain $newerGuid
             $updates.Guid | Should -Not -Contain $previewGuid
         }
 
         It 'follows a replacement chain within the month when previews are explicitly included' {
             $targetsByGuid[$newerGuid] = @($previewGuid)
-            $updates = @(Get-MSCatalogUpdate -Search 'Server 24H2' -Date '2026-09' -IncludePreview -ExcludeSuperseded)
+            $updates = @(Get-MSCatalogUpdate -Search '24H2' -Date '2026-09' -IncludePreview -ExcludeSuperseded)
             $updates.Count | Should -Be 2
             $updates.Guid | Should -Contain $previewGuid
             $updates.Guid | Should -Contain $netGuid
@@ -244,13 +246,13 @@ Describe 'Supersedence filtering within selected dates' {
 
         It 'uses title month even when LastUpdated has changed in October' {
             $searchHtml = $searchHtml.Replace('9/14/2026', '10/20/2026')
-            $updates = @(Get-MSCatalogUpdate -Search 'Server 24H2' -Date '2026-09' -ExcludeSuperseded)
+            $updates = @(Get-MSCatalogUpdate -Search '24H2' -Date '2026-09' -ExcludeSuperseded)
             $updates.Count | Should -Be 2
             $updates.Guid | Should -Contain $newerGuid
         }
 
         It 'preserves relationship objects in JSON after filtering' {
-            $updates = Get-MSCatalogUpdate -Search 'Server 24H2' -Date '2026-09' -ExcludeSuperseded -Format JSON | ConvertFrom-Json
+            $updates = Get-MSCatalogUpdate -Search '24H2' -Date '2026-09' -ExcludeSuperseded -Format JSON | ConvertFrom-Json
             $updates.Count | Should -Be 2
             ($updates | Where-Object Guid -eq $newerGuid).SupersededBy[0].Guid | Should -Be $octoberGuid
         }
@@ -261,14 +263,14 @@ Describe 'Supersedence filtering within selected dates' {
         ) {
             $searchHtml = $searchHtml.Replace('2026-09 ', "$Token ")
             # A year token also includes October, so restrict LastUpdated to September.
-            $updates = @(Get-MSCatalogUpdate -Search 'Server 24H2' -Date $Token -ToDate '2026-09-30' -ExcludeSuperseded)
+            $updates = @(Get-MSCatalogUpdate -Search '24H2' -Date $Token -ToDate '2026-09-30' -ExcludeSuperseded)
             $updates.Count | Should -Be 2
             $updates.Guid | Should -Contain $newerGuid
             $updates.Guid | Should -Contain $netGuid
         }
 
         It 'handles an empty monthly selection without detail requests' {
-            $updates = @(Get-MSCatalogUpdate -Search 'Server 24H2' -Date '2026-08' -ExcludeSuperseded)
+            $updates = @(Get-MSCatalogUpdate -Search '24H2' -Date '2026-08' -ExcludeSuperseded)
             $updates.Count | Should -Be 0
             Should -Invoke Invoke-CatalogDetailRequests -Times 0 -Exactly
         }
